@@ -23,7 +23,7 @@ llm_client = AsyncOpenAI(
 )
 
 # Use the free Gemini Flash model
-MODEL_NAME = "gemini-1.5-flash" 
+MODEL_NAME = "gemini-3.6-flash" 
 
 async def run_agent():
     # Define how to connect to our MCP server
