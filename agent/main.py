@@ -1,125 +1,92 @@
 import asyncio
-import json
 import os
 from dotenv import load_dotenv
 from mcp.client.stdio import stdio_client, StdioServerParameters
 from mcp.client.session import ClientSession
-from openai import AsyncOpenAI
+from google import genai
+from google.genai import types
 
-# Load environment variables from the .env file
+# Load environment variables
 load_dotenv()
-
-# Get the API key from the environment variable
 api_key = os.getenv("GEMINI_API_KEY")
 
 if not api_key:
     print("Error: GEMINI_API_KEY not found in .env file.")
     exit(1)
 
-# Set up the OpenAI client to use Google's Gemini API
-llm_client = AsyncOpenAI(
-    api_key=api_key,
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
-)
+# Initialize the new Google GenAI client
+client = genai.Client(api_key=api_key)
 
-# Use the free Gemini Flash model
-MODEL_NAME = "gemini-3.6-flash" 
+MODEL_NAME = "gemini-3.6-flash"
 
 async def run_agent():
-    # Define how to connect to our MCP server
-    server_params = StdioServerParameters(
-        command="python",
-        args=["mcp_server/server.py"]
-    )
-
-    print("Starting AI Agent with Gemini API...")
+    server_params = StdioServerParameters(command="python", args=["mcp_server/server.py"])
+    print("Starting AI Agent with new Google GenAI SDK...")
     
     async with stdio_client(server_params) as (read_stream, write_stream):
         async with ClientSession(read_stream, write_stream) as session:
             await session.initialize()
-            
-            # Request the list of available tools from the MCP server
             tools_response = await session.list_tools()
             
-            # Convert MCP tools format into OpenAI tool calling format
-            llm_tools = []
+            # Convert MCP tools to Gemini Function Declarations
+            gemini_tools = []
             for tool in tools_response.tools:
-                llm_tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        # Update property name from inputSchema to input_schema
-                        "parameters": tool.input_schema
-                    }
-                })
+                gemini_tools.append(
+                    types.FunctionDeclaration(
+                        name=tool.name,
+                        description=tool.description,
+                        parameters=tool.input_schema
+                    )
+                )
+            
+            # Configure the chat session with tools and system instruction
+            config = types.GenerateContentConfig(
+                tools=[types.Tool(function_declarations=gemini_tools)],
+                system_instruction="You are a helpful AI developer assistant. Use the provided tools to help the user manage and search their project files. Always analyze the tool output before answering."
+            )
+            
+            # Create an asynchronous chat session (client.aio for async)
+            chat = client.aio.chats.create(model=MODEL_NAME, config=config)
 
             print("\nAI Agent is ready! Type 'exit' to quit.")
-            
-            # Create a history array to store the conversation
-            messages = [
-                {
-                    "role": "system", 
-                    "content": "You are a helpful AI developer assistant. Use the provided tools to help the user manage and search their project files. Always analyze the tool output before answering."
-                }
-            ]
 
-            # Start the continuous chat loop
             while True:
                 user_input = input("\nYou: ")
                 if user_input.lower() == 'exit':
                     break
-                    
-                # Add user message to history
-                messages.append({"role": "user", "content": user_input})
 
                 try:
-                    # Send the conversation and tools to the Gemini API
-                    response = await llm_client.chat.completions.create(
-                        model=MODEL_NAME,
-                        messages=messages,
-                        tools=llm_tools
-                    )
-                    
-                    response_message = response.choices[0].message
-                    messages.append(response_message)
+                    # Send the user message
+                    response = await chat.send_message(user_input)
 
-                    # Check if the AI decided to use any of our tools
-                    if response_message.tool_calls:
-                        for tool_call in response_message.tool_calls:
-                            tool_name = tool_call.function.name
-                            tool_args = json.loads(tool_call.function.arguments)
-                            
-                            print(f"\n[AI is using tool: {tool_name} with arguments {tool_args}]")
-                            
-                            # Execute the tool via the MCP server
-                            mcp_result = await session.call_tool(tool_name, arguments=tool_args)
-                            tool_result_text = mcp_result.content[0].text
-                            
-                            # Add the tool result back into the conversation history
-                            messages.append({
-                                "role": "tool",
-                                "name": tool_name,
-                                "tool_call_id": tool_call.id,
-                                "content": tool_result_text
-                            })
-                            
-                        # Get the final answer from AI after it reads the tool results
-                        final_response = await llm_client.chat.completions.create(
-                            model=MODEL_NAME,
-                            messages=messages
+                    # Check if the AI wants to use a tool
+                    while response.function_calls:
+                        function_call = response.function_calls[0]
+                        tool_name = function_call.name
+                        
+                        # Convert arguments safely to a Python dictionary
+                        tool_args = dict(function_call.args) if function_call.args else {}
+                        
+                        print(f"\n[AI is using tool: {tool_name} with arguments {tool_args}]")
+                        
+                        # Call the MCP server
+                        mcp_result = await session.call_tool(tool_name, arguments=tool_args)
+                        tool_result_text = mcp_result.content[0].text
+                        
+                        # Send the tool result back to Gemini
+                        response = await chat.send_message(
+                            types.Part.from_function_response(
+                                name=tool_name,
+                                response={"result": tool_result_text}
+                            )
                         )
-                        final_text = final_response.choices[0].message.content
-                        messages.append({"role": "assistant", "content": final_text})
-                        print(f"\nAI: {final_text}")
                         
-                    else:
-                        # The AI replied with normal text without using any tools
-                        print(f"\nAI: {response_message.content}")
-                        
+                    # Print the final text answer
+                    print(f"\nAI: {response.text}")
+                    
                 except Exception as e:
                     print(f"\nAn error occurred: {str(e)}")
-                    print("Hint: Make sure your Gemini API key is correct and you have an active internet connection.")
+                    print("Hint: Check your API key and connection.")
 
 if __name__ == "__main__":
     asyncio.run(run_agent())

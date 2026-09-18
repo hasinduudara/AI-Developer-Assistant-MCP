@@ -1,2 +1,3 @@
 mcp
 python-dotenv
+google-genai
