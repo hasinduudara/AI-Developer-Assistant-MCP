@@ -1,39 +1,39 @@
 import os
-from mcp.server.fastmcp import FastMCP
+# Import MCPServer instead of FastMCP for mcp version 2.x
+from mcp.server.mcpserver import MCPServer
 
-# Initialize the FastMCP server
-# This acts as the bridge between our tools and the AI Agent
-mcp = FastMCP("DeveloperAssistant")
+# Create the MCP server
+# This connects our tools with the AI Agent
+mcp = MCPServer("DeveloperAssistant")
 
 @mcp.tool()
 def list_files(directory_path: str) -> str:
     """
-    List all files and directories in the given directory path.
+    List all files and folders in the given path.
     """
     try:
-        # Check if the provided path actually exists
+        # Check if the path exists
         if not os.path.exists(directory_path):
             return f"Error: The directory '{directory_path}' does not exist."
         
-        # Check if the path is a directory
+        # Check if the path is a real folder
         if not os.path.isdir(directory_path):
-            return f"Error: '{directory_path}' is not a directory."
+            return f"Error: '{directory_path}' is not a folder."
             
-        # Get all items in the directory
+        # Get all items inside the folder
         items = os.listdir(directory_path)
         
-        # If the folder is empty, return a simple message
+        # Check if the folder is empty
         if not items:
             return "The directory is completely empty."
             
-        # Join the list of files into a single string separated by newlines
+        # Combine the item names into one text block
         return "\n".join(items)
         
     except Exception as e:
-        # Catch and return any errors (like permission issues)
-        return f"An error occurred while reading the directory: {str(e)}"
+        # Return any error that happens
+        return f"An error occurred: {str(e)}"
 
 if __name__ == "__main__":
-    # Start the server using standard input/output (stdio)
-    # This is how the AI Agent will communicate with this server
+    # Start the server to talk with the AI Agent
     mcp.run()
